@@ -308,7 +308,23 @@ function generateReportPDF(){
   const sectionName = SECTIONS[sectionKey] || "همه بخش‌ها";
   const seller = sellerName.innerText || "-";
 
-  // ===== محاسبه =====
+  // ===== جدول مصرف (فیلتر شده) =====
+  const rows = records.filter(r=>{
+    const d = normalizeShamsi(r.date_shamsi);
+    if(from && d < from) return false;
+    if(to && d > to) return false;
+
+    if(sectionKey === "all") return true;
+    if(sectionKey === "income") return r.type === "income";
+    return r.section === sectionKey;
+  });
+
+  if(!rows.length){
+    alert("در این بازه گزارشی وجود ندارد");
+    return;
+  }
+
+  // ===== محاسبه فقط از rows فیلتر شده (نه از کل records) =====
   let incomeTotal = 0;
   let expenses = {
     kitchen: 0,
@@ -317,12 +333,7 @@ function generateReportPDF(){
     government: 0
   };
 
-  records.forEach(r=>{
-    const d = normalizeShamsi(r.date_shamsi);
-
-    if(from && d < from) return;
-    if(to && d > to) return;
-
+  rows.forEach(r=>{
     if(r.type === "income"){
       incomeTotal += Number(r.amount);
     }
@@ -332,95 +343,62 @@ function generateReportPDF(){
     }
   });
 
-  const totalExpense =
-    expenses.kitchen +
-    expenses.urgent +
-    expenses.internal +
-    expenses.government;
-
+  const totalExpense = expenses.kitchen + expenses.urgent + expenses.internal + expenses.government;
   const balance = incomeTotal - totalExpense;
-
-  // ===== جدول مصرف =====
-const rows = records.filter(r=>{
-  const d = normalizeShamsi(r.date_shamsi);
-  if(from && d < from) return false;
-  if(to && d > to) return false;
-
-  if(sectionKey === "all") return true;
-  if(sectionKey === "income") return r.type === "income";
-  return r.section === sectionKey;
-});
-
-  if(!rows.length){
-    alert("در این بازه گزارشی وجود ندارد");
-    return;
-  }
 
   // ===== عنوان =====
   doc.text(fixFa(`گزارش مالی ${sectionName}`), 105, 15, { align:"center" });
+  doc.setFontSize(14);
+  doc.text(fixFa(seller), 105, 22, { align:"center" });
   doc.setFontSize(10);
- doc.setFontSize(14);              // ← اسم مرجع درشت
-doc.text(fixFa(seller), 105, 22, { align:"center" });
-doc.setFontSize(10);              // ← برگردد به اندازه عادی
-
 
   // ===== جدول =====
   let startY = 40;
   const rowH = 9;
- 
   const pageW = 210;
-const headers = ["#", "تاریخ", "شرح", "شخص", "بخش", "مبلغ"];
-const colW = [10, 30, 50, 30, 30, 25];
- let x = pageW - 10;
-headers.forEach((h,i)=>{
-  x -= colW[i];
-  doc.rect(x, startY, colW[i], rowH);
-  doc.text(fixFa(h), x + colW[i]/2, startY + 6, { align:"center" });
-});
-startY += rowH;
+  const headers = ["#", "تاریخ", "شرح", "شخص", "بخش", "مبلغ"];
+  const colW = [10, 30, 50, 30, 30, 25];
+  
+  let x = pageW - 10;
+  headers.forEach((h,i)=>{
+    x -= colW[i];
+    doc.rect(x, startY, colW[i], rowH);
+    doc.text(fixFa(h), x + colW[i]/2, startY + 6, { align:"center" });
+  });
+  startY += rowH;
 
   rows.forEach((r,idx)=>{
-  if(startY + rowH > 280){
-    doc.addPage();
-    startY = 30;
-  }
+    if(startY + rowH > 280){
+      doc.addPage();
+      startY = 30;
+    }
 
-  x = pageW - 10;
-  const vals = [
-    idx+1,
-    r.date_shamsi,
-    r.description || "-",
-    r.person || "-",
-    r.type==="income" ? "درآمد" : SECTIONS[r.section],
-    r.amount
-  ];
-vals.forEach((v, i) => {
-  x -= colW[i];
+    x = pageW - 10;
+    const vals = [
+      idx+1,
+      r.date_shamsi,
+      r.description || "-",
+      r.person || "-",
+      r.type==="income" ? "درآمد" : SECTIONS[r.section],
+      r.amount
+    ];
+    
+    vals.forEach((v, i) => {
+      x -= colW[i];
 
-  // رنگ ردیف
-  if (r.type === "income") {
-    doc.setFillColor(204, 229, 255); // آبی
-  } else {
-    doc.setFillColor(255, 255, 255); // سفید
-  }
+      if (r.type === "income") {
+        doc.setFillColor(204, 229, 255);
+      } else {
+        doc.setFillColor(255, 255, 255);
+      }
 
-  // پس‌زمینه
-  doc.rect(x, startY, colW[i], rowH, "F");
-
-  // حاشیه
-  doc.rect(x, startY, colW[i], rowH);
-
-  // متن
-  doc.setTextColor(0, 0, 0);
-  doc.text(
-    fixFa(String(v)),
-    x + colW[i] / 2,
-    startY + 6,
-    { align: "center" }
-  );
-});
-  startY += rowH;
-});
+      doc.rect(x, startY, colW[i], rowH, "F");
+      doc.rect(x, startY, colW[i], rowH);
+      doc.setTextColor(0, 0, 0);
+      doc.text(fixFa(String(v)), x + colW[i] / 2, startY + 6, { align: "center" });
+    });
+    startY += rowH;
+  });
 
   // ===== جمع‌بندی =====
   startY += 10;
@@ -433,7 +411,6 @@ vals.forEach((v, i) => {
 
   doc.save(`financial-report-${sectionKey}.pdf`);
 }
-
 /* ================= عملیات ================= */
 async function addIncome(){
   const n = now();
