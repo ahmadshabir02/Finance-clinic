@@ -236,24 +236,26 @@ async function fetchRecords(){
 }
 
 function render(list){
-  tbody.innerHTML="";
- let runningBalance = 0;
-
-  list.forEach((r,i)=>{
-    if(r.type==="income") runningBalance += r.amount;
-    else runningBalance -= Math.abs(r.amount);
-
-     const rowClass = r.type === "income" ? "income-row" : "expense-row";
-
-tbody.innerHTML += `
-<tr class="${rowClass}">
-
+  tbody.innerHTML = "";
+  let runningBalance = window.startBalance || 0;
+  
+  list.forEach((r, i) => {
+    if(r.type === "income") {
+      runningBalance += Number(r.amount);
+    } else if(r.type === "expense") {
+      runningBalance -= Math.abs(r.amount);
+    }
+    
+    const rowClass = r.type === "income" ? "income-row" : "expense-row";
+    
+    tbody.innerHTML += `
+    <tr class="${rowClass}">
       <td>${i+1}</td>
-   <td>${r.date_shamsi || r.date}</td>
+      <td>${r.date_shamsi || r.date}</td>
       <td>${r.time}</td>
-      <td>${r.description||"-"}</td>
-      <td>${r.person||"-"}</td>
-      <td>${SECTIONS[r.section]}</td>
+      <td>${r.description || "-"}</td>
+      <td>${r.person || "-"}</td>
+      <td>${r.type === "income" ? "درآمد" : SECTIONS[r.section]}</td>
       <td>${r.amount}</td>
       <td>${runningBalance}</td>
       <td>
@@ -266,26 +268,45 @@ tbody.innerHTML += `
 
 function applyFilters(){
   const s = reportSection.value;
-
-  const a = normalizeShamsi(startDate.value) || "0000/00/00";
-  const b = normalizeShamsi(endDate.value) || "9999/99/99";
-
-  const filtered = records.filter(r=>{
-    const d = getRecordDate(r);
-
-    return (
-      (s === "all" ||
-       (s === "income" && r.type === "income") ||
-       r.section === s)
-      &&
-      d >= a && d <= b
-    );
+  
+  // تبدیل تاریخ‌ها به عدد برای مقایسه
+  const fromNum = shamsiToNumber(startDate.value);
+  const toNum = shamsiToNumber(endDate.value);
+  
+  // محاسبه باقی‌مانده قبل از تاریخ شروع
+  let startBalance = 0;
+  
+  records.forEach(r => {
+    const recordDateNum = shamsiToNumber(r.date_shamsi || r.date);
+    
+    // فقط رکوردهایی که تاریخشان قبل از تاریخ شروع است
+    if(recordDateNum < fromNum) {
+      if(r.type === "income") {
+        startBalance += Number(r.amount);
+      } else if(r.type === "expense") {
+        startBalance -= Math.abs(r.amount);
+      }
+    }
   });
-
+  
+  window.startBalance = startBalance;
+  
+  // فیلتر کردن برای نمایش
+  const filtered = records.filter(r => {
+    const recordDateNum = shamsiToNumber(r.date_shamsi || r.date);
+    const sectionMatch = (s === "all" || 
+                         (s === "income" && r.type === "income") || 
+                         r.section === s);
+    const dateMatch = recordDateNum >= fromNum && recordDateNum <= toNum;
+    
+    // اگر تاریخ شروع یا پایان خالی است، فیلتر تاریخ اعمال نشود
+    const noDateFilter = (!startDate.value && !endDate.value);
+    
+    return sectionMatch && (noDateFilter ? true : dateMatch);
+  });
+  
   render(filtered);
 }
-
-
 function generateReport(){
   const s = reportSection.value;
   const a = startDate.value || "0000-00-00";
@@ -308,12 +329,53 @@ function generateReportPDF(){
   const sectionName = SECTIONS[sectionKey] || "همه بخش‌ها";
   const seller = sellerName.innerText || "-";
 
-  // ===== جدول مصرف (فیلتر شده) =====
-  const rows = records.filter(r=>{
+  // ===== STEP 1: محاسبه باقی‌مانده کل سیستم (تا امروز) =====
+  let totalSystemBalance = 0;
+  
+  records.forEach(r => {
+    if(r.type === "income") {
+      totalSystemBalance += Number(r.amount);
+    } else if(r.type === "expense") {
+      totalSystemBalance -= Math.abs(r.amount);
+    }
+  });
+
+  // ===== STEP 2: محاسبه درآمد و مصرف در بازه =====
+  let incomeTotal = 0;
+  let expenses = {
+    kitchen: 0,
+    urgent: 0,
+    internal: 0,
+    government: 0
+  };
+
+  records.forEach(r => {
+    const d = normalizeShamsi(r.date_shamsi);
+    
+    if(from && d < from) return;
+    if(to && d > to) return;
+    if(!from && !to) {}
+
+    if(r.type === "income"){
+      incomeTotal += Number(r.amount);
+    }
+
+    if(r.type === "expense"){
+      expenses[r.section] += Math.abs(r.amount);
+    }
+  });
+
+  const totalExpense = expenses.kitchen +
+    expenses.urgent +
+    expenses.internal +
+    expenses.government;
+
+  // ===== STEP 3: جدول رکوردهای داخل بازه =====
+  const rows = records.filter(r => {
     const d = normalizeShamsi(r.date_shamsi);
     if(from && d < from) return false;
     if(to && d > to) return false;
-
+    
     if(sectionKey === "all") return true;
     if(sectionKey === "income") return r.type === "income";
     return r.section === sectionKey;
@@ -324,69 +386,69 @@ function generateReportPDF(){
     return;
   }
 
-  // ===== محاسبه فقط از rows فیلتر شده (نه از کل records) =====
-  let incomeTotal = 0;
-  let expenses = {
-    kitchen: 0,
-    urgent: 0,
-    internal: 0,
-    government: 0
-  };
-
-  rows.forEach(r=>{
-    if(r.type === "income"){
-      incomeTotal += Number(r.amount);
-    }
-
-    if(r.type === "expense"){
-      expenses[r.section] += Math.abs(r.amount);
-    }
-  });
-
-  const totalExpense = expenses.kitchen + expenses.urgent + expenses.internal + expenses.government;
-  const balance = incomeTotal - totalExpense;
-
-  // ===== عنوان =====
-  doc.text(fixFa(`گزارش مالی ${sectionName}`), 105, 15, { align:"center" });
+  // ===== عنوان گزارش =====
+  doc.text(fixFa(`گزارش مالی ${sectionName}`), 105, 15, { align: "center" });
   doc.setFontSize(14);
-  doc.text(fixFa(seller), 105, 22, { align:"center" });
+  doc.text(fixFa(seller), 105, 22, { align: "center" });
   doc.setFontSize(10);
+  
+  // بازه تاریخ
+  const dateRange = from && to ? `${from} الی ${to}` : (from ? `از ${from} به بعد` : (to ? `تا ${to}` : "کل گزارشات"));
+  doc.text(fixFa(`بازه: ${dateRange}`), 105, 29, { align: "center" });
 
-  // ===== جدول =====
-  let startY = 40;
-  const rowH = 9;
+  // ===== خلاصه مالی (بدون باقی‌مانده ابتدا و انتهای بازه) =====
+  let summaryY = 38;
+  doc.setFontSize(9);
+  doc.setTextColor(0, 0, 0);
+  
+  doc.text(fixFa(`باقی‌مانده کل سیستم (تا امروز): ${totalSystemBalance.toLocaleString()} افغانی`), 200, summaryY, { align: "right" });
+  doc.text(fixFa(`درآمد کل در بازه: ${incomeTotal.toLocaleString()} افغانی`), 200, summaryY + 6, { align: "right" });
+  doc.text(fixFa(`کل مصرف در بازه: ${totalExpense.toLocaleString()} افغانی`), 200, summaryY + 12, { align: "right" });
+
+  // ===== جدول جزئیات =====
+  let startY = summaryY + 22;
+  const rowH = 8;
   const pageW = 210;
-  const headers = ["#", "تاریخ", "شرح", "شخص", "بخش", "مبلغ"];
-  const colW = [10, 30, 50, 30, 30, 25];
+  const headers = ["#", "تاریخ", "شرح", "شخص", "بخش", "مبلغ (افغانی)"];
+  const colW = [10, 30, 50, 30, 35, 35];
   
   let x = pageW - 10;
-  headers.forEach((h,i)=>{
+  headers.forEach((h, i) => {
     x -= colW[i];
     doc.rect(x, startY, colW[i], rowH);
-    doc.text(fixFa(h), x + colW[i]/2, startY + 6, { align:"center" });
+    doc.text(fixFa(h), x + colW[i] / 2, startY + 5, { align: "center" });
   });
   startY += rowH;
 
-  rows.forEach((r,idx)=>{
+  rows.forEach((r, idx) => {
     if(startY + rowH > 280){
       doc.addPage();
       startY = 30;
+      // تکرار هدر در صفحه جدید
+      x = pageW - 10;
+      headers.forEach((h, i) => {
+        x -= colW[i];
+        doc.rect(x, startY, colW[i], rowH);
+        doc.text(fixFa(h), x + colW[i] / 2, startY + 5, { align: "center" });
+      });
+      startY += rowH;
     }
 
     x = pageW - 10;
     const vals = [
-      idx+1,
+      idx + 1,
       r.date_shamsi,
       r.description || "-",
       r.person || "-",
-      r.type==="income" ? "درآمد" : SECTIONS[r.section],
-      r.amount
+      r.type === "income" ? "درآمد" : SECTIONS[r.section],
+      Number(r.amount).toLocaleString()
     ];
     
     vals.forEach((v, i) => {
       x -= colW[i];
 
-      if (r.type === "income") {
+      // رنگ ردیف
+      if(r.type === "income") {
         doc.setFillColor(204, 229, 255);
       } else {
         doc.setFillColor(255, 255, 255);
@@ -395,21 +457,34 @@ function generateReportPDF(){
       doc.rect(x, startY, colW[i], rowH, "F");
       doc.rect(x, startY, colW[i], rowH);
       doc.setTextColor(0, 0, 0);
-      doc.text(fixFa(String(v)), x + colW[i] / 2, startY + 6, { align: "center" });
+      doc.text(
+        fixFa(String(v)),
+        x + colW[i] / 2,
+        startY + 5,
+        { align: "center" }
+      );
     });
     startY += rowH;
   });
 
-  // ===== جمع‌بندی =====
-  startY += 10;
-  doc.text(fixFa(`درآمد کل: ${incomeTotal}`), 200, startY, {align:"right"});
-  doc.text(fixFa(`مصرف آشپزخانه: ${expenses.kitchen}`), 200, startY+6, {align:"right"});
-  doc.text(fixFa(`مصرف عاجل: ${expenses.urgent}`), 200, startY+12, {align:"right"});
-  doc.text(fixFa(`مصرف داخلی: ${expenses.internal}`), 200, startY+18, {align:"right"});
-  doc.text(fixFa(`مصرف دولتی: ${expenses.government}`), 200, startY+24, {align:"right"});
-  doc.text(fixFa(`باقی‌مانده: ${balance}`), 200, startY+32, {align:"right"});
+  // ===== جمع‌بندی تفکیکی مصرف =====
+  startY += 8;
+  doc.setFontSize(9);
+  doc.setTextColor(0, 0, 0);
+  
+  doc.text(fixFa(`📊 جمع‌بندی مصرف در بازه:`), 200, startY, { align: "right" });
+  doc.text(fixFa(`   • آشپزخانه: ${expenses.kitchen.toLocaleString()} افغانی`), 200, startY + 6, { align: "right" });
+  doc.text(fixFa(`   • عاجل: ${expenses.urgent.toLocaleString()} افغانی`), 200, startY + 12, { align: "right" });
+  doc.text(fixFa(`   • داخلی: ${expenses.internal.toLocaleString()} افغانی`), 200, startY + 18, { align: "right" });
+  doc.text(fixFa(`   • دولتی: ${expenses.government.toLocaleString()} افغانی`), 200, startY + 24, { align: "right" });
+  
+  doc.setFontSize(10);
+  doc.setTextColor(0, 100, 0);
+  doc.text(fixFa(`💰 باقی‌مانده فعلی در سیستم: ${totalSystemBalance.toLocaleString()} افغانی`), 200, startY + 34, { align: "right" });
 
-  doc.save(`financial-report-${sectionKey}.pdf`);
+  // نام فایل
+  const fileName = `financial-report-${sectionKey}-${from || "all"}-to-${to || "all"}.pdf`;
+  doc.save(fileName);
 }
 /* ================= عملیات ================= */
 async function addIncome(){
@@ -507,7 +582,15 @@ async function delRec(id){
     }
   });
 }
-
+// تبدیل تاریخ شمسی به عدد برای مقایسه ساده (YYYYMMDD)
+function shamsiToNumber(dateStr){
+  if(!dateStr) return 0;
+  dateStr = faToEn(dateStr.trim());
+  dateStr = dateStr.replaceAll('-', '/');
+  const parts = dateStr.split('/');
+  if(parts.length !== 3) return 0;
+  return parseInt(parts[0])*10000 + parseInt(parts[1])*100 + parseInt(parts[2]);
+}
 /* ================= میانبر ================= */
 document.addEventListener("keydown",async e=>{
   if(e.ctrlKey && e.key==="k"){ e.preventDefault(); openSettings(); }
